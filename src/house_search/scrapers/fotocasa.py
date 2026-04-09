@@ -137,29 +137,34 @@ class FotocasaScraper(BaseScraper):
         page = await self._new_page(context)
 
         try:
+            # Load page 1 first to accept cookies
             console.print(f"[magenta]fotocasa[/magenta] Loading {BASE_URL}")
             await page.goto(BASE_URL, wait_until="networkidle", timeout=60000)
             await random_delay(2, 4)
             await self._accept_cookies(page)
             await random_delay(1, 2)
 
-            page_num = 1
-            while page_num <= self.max_pages:
-                console.print(f"[magenta]fotocasa[/magenta] Scraping page {page_num}")
+            for page_num in range(1, self.max_pages + 1):
+                # Page 1 uses BASE_URL, subsequent pages append /N to the path
+                if page_num > 1:
+                    url = f"{BASE_URL}/{page_num}"
+                    console.print(f"[magenta]fotocasa[/magenta] Loading page {page_num}")
+                    await page.goto(url, wait_until="networkidle", timeout=60000)
+                    await random_delay(2, 4)
+                else:
+                    console.print(f"[magenta]fotocasa[/magenta] Scraping page {page_num}")
+
                 content = await page.content()
                 listings = self._parse_page(content)
 
                 if not listings:
-                    console.print("[yellow]fotocasa[/yellow] No listings parsed, stopping.")
+                    console.print("[yellow]fotocasa[/yellow] No listings on this page, stopping.")
                     break
 
                 for listing in listings:
                     yield listing
 
-                if not await self._go_next_page(page):
-                    break
-                await random_delay(2, 5)
-                page_num += 1
+                await random_delay(1, 3)
         finally:
             await context.close()
 
@@ -178,17 +183,6 @@ class FotocasaScraper(BaseScraper):
                     return
             except Exception:
                 continue
-
-    async def _go_next_page(self, page: Page) -> bool:
-        try:
-            btn = page.locator("button[aria-label='Siguiente']").first
-            if await btn.is_visible(timeout=3000) and await btn.is_enabled():
-                await btn.click()
-                await page.wait_for_load_state("networkidle", timeout=20000)
-                return True
-        except Exception:
-            pass
-        return False
 
     def _parse_page(self, html: str) -> list[Listing]:
         props = _extract_initial_props(html)

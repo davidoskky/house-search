@@ -95,7 +95,7 @@ def main() -> None:
         default=["idealista", "fotocasa"],
         choices=["idealista", "fotocasa"],
     )
-    scrape_p.add_argument("--max-pages", type=int, default=5)
+    scrape_p.add_argument("--max-pages", type=int, default=20)
     scrape_p.add_argument("--no-headless", action="store_true", help="Show browser window")
 
     subparsers.add_parser("list", help="Show stored listings")

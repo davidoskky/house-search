@@ -73,12 +73,10 @@ class IdealistaScraper(BaseScraper):
                 for listing in listings:
                     yield listing
 
-                next_url = await self._get_next_page_url(page)
-                if not next_url:
+                has_next = await self._click_next_page(page)
+                if not has_next:
                     break
-                await random_delay(2, 5)
-                await page.goto(next_url, wait_until="domcontentloaded", timeout=30000)
-                await random_delay(2, 3)
+                await random_delay(3, 6)
                 page_num += 1
         finally:
             await context.close()
@@ -99,16 +97,20 @@ class IdealistaScraper(BaseScraper):
             except Exception:
                 continue
 
-    async def _get_next_page_url(self, page: Page) -> str | None:
+    async def _click_next_page(self, page: Page) -> bool:
+        """Click the next-page button in place. Returns True if clicked."""
         try:
             next_btn = page.locator("a.icon-arrow-right-after").first
-            if await next_btn.is_visible(timeout=3000):
-                href = await next_btn.get_attribute("href")
-                if href:
-                    return f"https://www.idealista.com{href}"
+            if not await next_btn.is_visible(timeout=3000):
+                return False
+            # Scroll the button into view and click (human-like)
+            await next_btn.scroll_into_view_if_needed()
+            await random_delay(0.5, 1.5)
+            await next_btn.click()
+            await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            return True
         except Exception:
-            pass
-        return None
+            return False
 
     def _parse_listings_page(self, html: str) -> list[Listing]:
         soup = BeautifulSoup(html, "html.parser")
