@@ -197,7 +197,6 @@ class IdealistaScraper(BaseScraper):
             has_garden = "jardín" in tags_text or "jardin" in tags_text
 
         return Listing(
-            id=f"idealista:{external_id}",
             source="idealista",
             external_id=str(external_id),
             url=url,

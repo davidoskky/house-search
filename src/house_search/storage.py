@@ -48,7 +48,8 @@ def get_db() -> sqlite_utils.Database:
 def save_listing(listing: Listing, db: sqlite_utils.Database | None = None) -> None:
     if db is None:
         db = get_db()
-    row = listing.model_dump()
+    # Exclude derived computed fields not persisted to DB
+    row = listing.model_dump(exclude={"price_per_room", "price_per_m2"})
     row["image_urls"] = json.dumps(row["image_urls"])
     row["scraped_at"] = row["scraped_at"].isoformat()
     # bool -> int for SQLite

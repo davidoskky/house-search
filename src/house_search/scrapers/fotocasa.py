@@ -100,7 +100,6 @@ def _listing_from_raw(raw: dict) -> Listing | None:
     title = f"{building_subtype} en {address}" if address else f"{building_subtype} {external_id}"
 
     return Listing(
-        id=f"fotocasa:{external_id}",
         source="fotocasa",
         external_id=external_id,
         url=url,
