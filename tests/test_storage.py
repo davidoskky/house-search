@@ -1,10 +1,11 @@
 from __future__ import annotations
+from unittest.mock import MagicMock, patch
 
 import sqlite_utils
 import pytest
 
 from house_search.models import Listing
-from house_search.storage import load_listings, save_listing, save_listings
+from house_search.storage import geocode_missing, load_listings, save_listing, save_listings
 
 
 def _db() -> sqlite_utils.Database:
@@ -136,3 +137,74 @@ class TestLoadListings:
         assert len(loaded) == 3
         prices = {l.price for l in loaded}
         assert prices == {500.0, 800.0, 1000.0}
+
+
+class TestGeocodeEnsureIndexes:
+    def test_ensure_indexes_creates_indexes(self):
+        from house_search.storage import ensure_indexes, get_db
+        db = _db()
+        # Create schema first
+        save_listing(_listing(), db)
+        ensure_indexes(db)
+        index_names = {idx.name for idx in db["listings"].indexes}
+        assert "idx_price" in index_names
+        assert "idx_rooms" in index_names
+        assert "idx_coords" in index_names
+
+    def test_ensure_indexes_idempotent(self):
+        from house_search.storage import ensure_indexes
+        db = _db()
+        save_listing(_listing(), db)
+        ensure_indexes(db)
+        ensure_indexes(db)  # second call must not raise
+
+
+class TestGeocodeMissing:
+    def test_returns_zero_when_no_missing(self):
+        db = _db()
+        # Listing already has coordinates
+        save_listing(_listing(), db)
+        db.execute("UPDATE listings SET latitude = 42.88, longitude = -8.54 WHERE id = 'idealista:10001'")
+        result = geocode_missing(db)
+        assert result == 0
+
+    def test_geocodes_listing_with_address_and_no_coords(self):
+        from unittest.mock import MagicMock, patch
+        db = _db()
+        save_listing(_listing(address="Calle Mayor 1"), db)
+        # latitude IS NULL (no coords saved) — confirm
+        row = list(db.execute("SELECT latitude FROM listings").fetchall())
+        assert row[0][0] is None
+
+        mock_location = MagicMock()
+        mock_location.latitude = 42.8805
+        mock_location.longitude = -8.5457
+
+        with patch("house_search.storage.RateLimiter") as mock_rl_cls:
+            mock_geocode_fn = MagicMock(return_value=mock_location)
+            mock_rl_cls.return_value = mock_geocode_fn
+            result = geocode_missing(db)
+
+        assert result == 1
+        row = list(db.execute("SELECT latitude, longitude FROM listings").fetchall())
+        # Column may be stored without type affinity in in-memory DB; cast to float
+        assert float(row[0][0]) == pytest.approx(42.8805)
+        assert float(row[0][1]) == pytest.approx(-8.5457)
+
+    def test_skips_listing_without_address(self):
+        db = _db()
+        # No address field — should skip entirely
+        save_listing(_listing(address=None), db)
+        with patch("house_search.storage.RateLimiter") as mock_rl_cls:
+            mock_rl_cls.return_value = MagicMock()
+            result = geocode_missing(db)
+        assert result == 0
+
+    def test_skips_when_geocoder_returns_none(self):
+        from unittest.mock import MagicMock, patch
+        db = _db()
+        save_listing(_listing(address="Lugar Inexistente 999"), db)
+        with patch("house_search.storage.RateLimiter") as mock_rl_cls:
+            mock_rl_cls.return_value = MagicMock(return_value=None)
+            result = geocode_missing(db)
+        assert result == 0

@@ -8,7 +8,7 @@ from rich.table import Table
 
 from .scrapers.fotocasa import FotocasaScraper
 from .scrapers.idealista import IdealistaScraper
-from .storage import get_db, load_listings, save_listings
+from .storage import geocode_missing, get_db, load_listings, save_listings
 
 console = Console()
 
@@ -46,6 +46,12 @@ async def run_scrapers(
         db = get_db()
         save_listings(all_listings, db)
         console.print(f"\n[bold green]Saved {len(all_listings)} listings to database.[/bold green]")
+        console.rule("Geocoding")
+        n = geocode_missing(db)
+        if n:
+            console.print(f"[green]Geocoded {n} Idealista listing(s).[/green]")
+        else:
+            console.print("[dim]No new addresses to geocode.[/dim]")
     else:
         console.print("[yellow]No listings found.[/yellow]")
 
@@ -94,12 +100,27 @@ def main() -> None:
 
     subparsers.add_parser("list", help="Show stored listings")
 
+    serve_p = subparsers.add_parser("serve", help="Launch the Streamlit web UI")
+    serve_p.add_argument("--port", type=int, default=8501)
+    serve_p.add_argument("--host", default="localhost")
+
     args = parser.parse_args()
 
     if args.command == "scrape":
         asyncio.run(run_scrapers(args.sources, args.max_pages, headless=not args.no_headless))
     elif args.command == "list":
         show_listings()
+    elif args.command == "serve":
+        import subprocess
+        import sys
+        from pathlib import Path
+        app_path = Path(__file__).parent / "web" / "app.py"
+        subprocess.run([
+            sys.executable, "-m", "streamlit", "run", str(app_path),
+            "--server.port", str(args.port),
+            "--server.address", args.host,
+            "--browser.gatherUsageStats", "false",
+        ])
     else:
         parser.print_help()
 
