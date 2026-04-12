@@ -144,10 +144,17 @@ DATA.forEach(d => {{
 
 
 _STATUS_LABELS = {
-    "new": ("⬜", "Nueva"),
-    "to_call": ("📞", "Llamar"),
-    "called": ("✅", "Llamada"),
+    "new":       ("⬜", "Nueva"),
+    "to_call":   ("📞", "Llamar"),
+    "called":    ("✅", "Llamada"),
     "discarded": ("🗑️", "Descartada"),
+}
+
+_STATUS_COLOURS = {
+    "new":       "#6b7280",  # gray
+    "to_call":   "#2563eb",  # blue
+    "called":    "#16a34a",  # green
+    "discarded": "#9ca3af",  # light gray
 }
 
 _NEXT_ACTIONS = {
@@ -209,7 +216,13 @@ def _listing_card(lst: Listing) -> None:
                 st.session_state.map_highlight = None if is_highlighted else lst.id
                 st.rerun()
         with action_cols[1]:
-            st.caption(f"{status_icon} {status_label}")
+            colour = _STATUS_COLOURS.get(lst.status, "#6b7280")
+            st.markdown(
+                f'<span style="background:{colour};color:white;padding:3px 10px;'
+                f'border-radius:12px;font-size:0.78em;font-weight:600;white-space:nowrap">'
+                f'{status_icon} {status_label}</span>',
+                unsafe_allow_html=True,
+            )
         for i, (label, new_status) in enumerate(_NEXT_ACTIONS.get(lst.status, []), 2):
             with action_cols[i]:
                 if st.button(label, key=f"status_{lst.id}_{new_status}", use_container_width=True):
@@ -363,6 +376,17 @@ def main() -> None:
         f"Mostrando **{len(filtered)}** de {len(all_listings)} anuncios  "
         f"· {sum(1 for l in filtered if l.latitude is not None)} en el mapa"
     )
+
+    # Make the map column sticky so it stays visible while scrolling cards
+    st.markdown("""
+<style>
+div[data-testid="stHorizontalBlock"] { align-items: flex-start; }
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:last-child {
+    position: sticky;
+    top: 0.5rem;
+}
+</style>
+""", unsafe_allow_html=True)
 
     col_list, col_map = st.columns([4, 6])
 
