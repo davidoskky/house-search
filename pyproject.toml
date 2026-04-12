@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.14.3",
-    "folium>=0.20.0",
     "geopy>=2.4.1",
     "hatchling>=1.29.0",
     "httpx>=0.28.1",
@@ -16,7 +15,6 @@ dependencies = [
     "rich>=14.3.3",
     "sqlite-utils>=3.39",
     "streamlit>=1.56.0",
-    "streamlit-folium>=0.27.1",
 ]
 
 [tool.uv.sources]

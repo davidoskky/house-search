@@ -1,11 +1,11 @@
 """Streamlit web UI for browsing rental listings."""
 from __future__ import annotations
 
+import json
 import math
 
-import folium
 import streamlit as st
-from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 
 from house_search.models import Listing
 from house_search.storage import load_listings, update_listing_status
@@ -72,31 +72,75 @@ def _filter_listings(
     return result
 
 
-def _build_map(listings: list[Listing]) -> folium.Map:
-    m = folium.Map(location=_CENTRE, zoom_start=13, tiles="CartoDB positron")
-    for lst in listings:
-        if lst.latitude is None or lst.longitude is None:
-            continue
-        colour = _SOURCE_COLOURS.get(lst.source, "#6b7280")
-        ppr = f"  ·  {lst.price_per_room:.0f}€/h" if lst.price_per_room else ""
-        size = f"  ·  {lst.size_m2:.0f}m²" if lst.size_m2 else ""
-        rooms = f"  ·  {lst.rooms}h" if lst.rooms else ""
-        popup_html = (
-            f"<b><a href='{lst.url}' target='_blank'>{lst.title[:60]}</a></b><br>"
-            f"<b style='color:{colour}'>{lst.price:.0f}€/mes</b>"
-            f"{rooms}{size}{ppr}"
-        )
-        folium.CircleMarker(
-            location=(lst.latitude, lst.longitude),
-            radius=7,
-            color=colour,
-            fill=True,
-            fill_color=colour,
-            fill_opacity=0.7,
-            popup=folium.Popup(popup_html, max_width=280),
-            tooltip=f"{lst.price:.0f}€ · {lst.source}",
-        ).add_to(m)
-    return m
+def _render_map(listings: list[Listing], highlighted_id: str | None = None) -> None:
+    """Render an interactive Leaflet map, optionally highlighting one marker."""
+    markers_data = [
+        {
+            "id": lst.id,
+            "lat": lst.latitude,
+            "lon": lst.longitude,
+            "title": lst.title[:60],
+            "price": lst.price,
+            "source": lst.source,
+            "url": lst.url,
+            "rooms": lst.rooms,
+            "size_m2": lst.size_m2,
+            "price_per_room": lst.price_per_room,
+            "highlighted": lst.id == highlighted_id,
+        }
+        for lst in listings
+        if lst.latitude is not None and lst.longitude is not None
+    ]
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body {{ margin:0; padding:0; height:100%; }}
+    #map {{ width:100%; height:100%; }}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<script>
+const DATA = {json.dumps(markers_data)};
+const COLOURS = {json.dumps(_SOURCE_COLOURS)};
+const DEFAULT_COL = '#6b7280';
+const HIGHLIGHT_COL = '#f59e0b';
+
+let centre = [{_CENTRE[0]},{_CENTRE[1]}];
+let zoom = 13;
+const highlighted = DATA.find(d => d.highlighted);
+if (highlighted) {{ centre = [highlighted.lat, highlighted.lon]; zoom = 15; }}
+
+const map = L.map('map').setView(centre, zoom);
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+  attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 19
+}}).addTo(map);
+
+DATA.forEach(d => {{
+  const col  = d.highlighted ? HIGHLIGHT_COL : (COLOURS[d.source] || DEFAULT_COL);
+  const ppr  = d.price_per_room ? ` &middot; ${{Math.round(d.price_per_room)}}€/h` : '';
+  const rooms = d.rooms   ? ` &middot; ${{d.rooms}}h`               : '';
+  const size  = d.size_m2 ? ` &middot; ${{Math.round(d.size_m2)}}m²` : '';
+  const m = L.circleMarker([d.lat, d.lon], {{
+    radius: d.highlighted ? 14 : 7,
+    color: col, fillColor: col,
+    fillOpacity: d.highlighted ? 1.0 : 0.7,
+    weight: d.highlighted ? 3 : 2,
+  }}).addTo(map).bindPopup(
+    `<b><a href="${{d.url}}" target="_blank">${{d.title}}</a></b><br>` +
+    `<span style="color:${{col}}">${{Math.round(d.price)}}€/mes</span>${{rooms}}${{size}}${{ppr}}`
+  );
+  if (d.highlighted) m.openPopup();
+}});
+</script>
+</body>
+</html>"""
+    components.html(html, height=600)
 
 
 _STATUS_LABELS = {
@@ -107,7 +151,6 @@ _STATUS_LABELS = {
 }
 
 _NEXT_ACTIONS = {
-    # current_status -> list of (label, new_status)
     "new":       [("📞 Llamar", "to_call"), ("🗑️ Descartar", "discarded")],
     "to_call":   [("✅ Llamada", "called"), ("🗑️ Descartar", "discarded"), ("↩️", "new")],
     "called":    [("📞 Volver a llamar", "to_call"), ("🗑️ Descartar", "discarded"), ("↩️", "new")],
@@ -124,8 +167,7 @@ def _listing_card(lst: Listing) -> None:
     ppr = f" · **{lst.price_per_room:.0f}€/h**" if lst.price_per_room else ""
     rooms = f" · {lst.rooms}h" if lst.rooms else ""
     size = f" · {lst.size_m2:.0f}m²" if lst.size_m2 else ""
-    geo = "📍" if lst.latitude else "·"
-    source_badge = "🔵" if lst.source == "idealista" else "🟠"
+    source_badge = _SOURCE_COLOURS.get(lst.source, "#6b7280")
     badges = []
     if lst.has_elevator:
         badges.append("🛗")
@@ -135,6 +177,7 @@ def _listing_card(lst: Listing) -> None:
         badges.append("🌿")
 
     status_icon, status_label = _STATUS_LABELS.get(lst.status, ("⬜", lst.status))
+    is_highlighted = st.session_state.get("map_highlight") == lst.id
 
     with st.container(border=True):
         cols = st.columns([2, 5])
@@ -144,7 +187,12 @@ def _listing_card(lst: Listing) -> None:
             else:
                 st.markdown("🏠")
         with cols[1]:
-            st.markdown(f"{source_badge} {geo} [{lst.title[:55]}]({lst.url})")
+            st.markdown(
+                f'<span style="display:inline-block;width:10px;height:10px;'
+                f'border-radius:50%;background:{source_badge};margin-right:4px"></span>'
+                f'[{lst.title[:55]}]({lst.url})',
+                unsafe_allow_html=True,
+            )
             st.markdown(
                 f"**{lst.price:.0f}€/mes**{ppr}{rooms}{size}"
                 + ("  " + " ".join(badges) if badges else "")
@@ -154,11 +202,15 @@ def _listing_card(lst: Listing) -> None:
             if lst.phone:
                 st.markdown(f"📞 `{lst.phone}`")
 
-        # Status row: current status badge + action buttons
-        action_cols = st.columns([2] + [2] * len(_NEXT_ACTIONS.get(lst.status, [])))
+        action_cols = st.columns([1, 2] + [2] * len(_NEXT_ACTIONS.get(lst.status, [])))
         with action_cols[0]:
+            locate_label = "🟡" if is_highlighted else "📍"
+            if lst.latitude and st.button(locate_label, key=f"locate_{lst.id}", help="Ver en el mapa"):
+                st.session_state.map_highlight = None if is_highlighted else lst.id
+                st.rerun()
+        with action_cols[1]:
             st.caption(f"{status_icon} {status_label}")
-        for i, (label, new_status) in enumerate(_NEXT_ACTIONS.get(lst.status, []), 1):
+        for i, (label, new_status) in enumerate(_NEXT_ACTIONS.get(lst.status, []), 2):
             with action_cols[i]:
                 if st.button(label, key=f"status_{lst.id}_{new_status}", use_container_width=True):
                     _set_status(lst.id, new_status)
@@ -268,8 +320,6 @@ def main() -> None:
             selected_hoods = []
 
     # ---- apply filters ----
-    sources_filter = selected_sources
-
     statuses_filter = []
     if show_new:
         statuses_filter.append("new")
@@ -298,16 +348,14 @@ def main() -> None:
         max_size=size_range[1],
         size_max_cap=max_size_val,
         amenities=amenities,
-        sources=sources_filter,
+        sources=selected_sources,
         property_types=selected_types,
         statuses=statuses_filter,
     )
 
-    # Apply neighborhood filter (post-step, cleaner)
     if selected_hoods:
         filtered = [l for l in filtered if l.neighborhood in selected_hoods]
 
-    # Sort by price
     filtered.sort(key=lambda l: l.price)
 
     # ---- layout: cards | map ----
@@ -318,9 +366,10 @@ def main() -> None:
 
     col_list, col_map = st.columns([4, 6])
 
+    highlighted_id: str | None = st.session_state.get("map_highlight")
+
     with col_map:
-        m = _build_map(filtered)
-        st_folium(m, width=None, height=600, returned_objects=[])
+        _render_map(filtered, highlighted_id=highlighted_id)
 
     with col_list:
         if not filtered:
