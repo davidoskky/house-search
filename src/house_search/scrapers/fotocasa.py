@@ -147,7 +147,6 @@ class FotocasaScraper(BaseScraper):
         page = await self._new_page(context)
 
         try:
-            # Load page 1 first to accept cookies
             console.print(f"[magenta]fotocasa[/magenta] Loading {BASE_URL}")
             await page.goto(BASE_URL, wait_until="networkidle", timeout=60000)
             await random_delay(2, 4)
@@ -155,15 +154,7 @@ class FotocasaScraper(BaseScraper):
             await random_delay(1, 2)
 
             for page_num in range(1, self.max_pages + 1):
-                # Page 1 uses BASE_URL, subsequent pages append /N to the path
-                if page_num > 1:
-                    url = f"{BASE_URL}/{page_num}"
-                    console.print(f"[magenta]fotocasa[/magenta] Loading page {page_num}")
-                    await page.goto(url, wait_until="networkidle", timeout=60000)
-                    await random_delay(2, 4)
-                else:
-                    console.print(f"[magenta]fotocasa[/magenta] Scraping page {page_num}")
-
+                console.print(f"[magenta]fotocasa[/magenta] Scraping page {page_num}")
                 content = await page.content()
                 listings = self._parse_page(content)
 
@@ -174,9 +165,26 @@ class FotocasaScraper(BaseScraper):
                 for listing in listings:
                     yield listing
 
-                await random_delay(1, 3)
+                has_next = await self._click_next_page(page)
+                if not has_next:
+                    break
+                await random_delay(2, 4)
         finally:
             await context.close()
+
+    async def _click_next_page(self, page: Page) -> bool:
+        """Click the SPA 'Siguiente' button. Returns True if clicked."""
+        try:
+            btn = page.locator("button[aria-label='Siguiente']").first
+            if not await btn.is_visible(timeout=5000):
+                return False
+            await btn.scroll_into_view_if_needed()
+            await random_delay(0.5, 1.5)
+            await btn.click()
+            await page.wait_for_load_state("networkidle", timeout=30000)
+            return True
+        except Exception:
+            return False
 
     async def _accept_cookies(self, page: Page) -> None:
         for selector in [
