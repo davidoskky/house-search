@@ -9,6 +9,7 @@ dependencies = [
     "geopy>=2.4.1",
     "hatchling>=1.29.0",
     "httpx>=0.28.1",
+    "numpy<2.4",
     "playwright>=1.58.0",
     "playwright-stealth",
     "pydantic>=2.12.5",
