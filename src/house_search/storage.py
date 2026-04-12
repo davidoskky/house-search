@@ -36,6 +36,7 @@ def get_db() -> sqlite_utils.Database:
                 "latitude": float,
                 "longitude": float,
                 "description": str,
+                "phone": str,
                 "image_urls": str,  # JSON
                 "has_elevator": int,
                 "has_parking": int,
@@ -43,10 +44,22 @@ def get_db() -> sqlite_utils.Database:
                 "has_garden": int,
                 "pets_allowed": int,
                 "property_type": str,
+                "status": str,
                 "scraped_at": str,
             },
             pk="id",
         )
+    # Migrate existing DBs: add columns introduced after initial schema
+    if "listings" in db.table_names():
+        existing_cols = {c.name for c in db["listings"].columns}
+        migrations = [
+            ("phone",  "TEXT"),
+            ("status", "TEXT DEFAULT 'new'"),
+        ]
+        for col, col_def in migrations:
+            if col not in existing_cols:
+                db.execute(f"ALTER TABLE listings ADD COLUMN {col} {col_def}")
+
     ensure_indexes(db)
     return db
 
@@ -62,6 +75,7 @@ def ensure_indexes(db: sqlite_utils.Database) -> None:
         "idx_neighborhood": ["neighborhood"],
         "idx_coords": ["latitude", "longitude"],
         "idx_source": ["source"],
+        "idx_status": ["status"],
     }
     for name, cols in wanted.items():
         if name not in existing:
@@ -79,7 +93,14 @@ def save_listing(listing: Listing, db: sqlite_utils.Database | None = None) -> N
     for field in ("has_elevator", "has_parking", "has_terrace", "has_garden", "pets_allowed"):
         if row[field] is not None:
             row[field] = int(row[field])
-    db["listings"].upsert(row, pk="id")
+    # Preserve user-set status across re-scrapes
+    if "listings" in db.table_names():
+        existing = db.execute(
+            "SELECT status FROM listings WHERE id = ?", [row["id"]]
+        ).fetchone()
+        if existing and existing[0] and existing[0] != "new":
+            row["status"] = existing[0]
+    db["listings"].upsert(row, pk="id", alter=True)
 
 
 def save_listings(listings: list[Listing], db: sqlite_utils.Database | None = None) -> None:
@@ -87,6 +108,17 @@ def save_listings(listings: list[Listing], db: sqlite_utils.Database | None = No
         db = get_db()
     for listing in listings:
         save_listing(listing, db)
+
+
+def update_listing_status(
+    listing_id: str,
+    status: str,
+    db: sqlite_utils.Database | None = None,
+) -> None:
+    if db is None:
+        db = get_db()
+    db.execute("UPDATE listings SET status = ? WHERE id = ?", [status, listing_id])
+    db.conn.commit()
 
 
 def load_listings(db: sqlite_utils.Database | None = None) -> list[Listing]:
@@ -144,6 +176,7 @@ def geocode_missing(db: sqlite_utils.Database | None = None) -> int:
             "UPDATE listings SET latitude = ?, longitude = ? WHERE id = ?",
             [location.latitude, location.longitude, row_id],
         )
+        db.conn.commit()
         geocoded += 1
         logger.info("Geocoded %s → (%.4f, %.4f)", row_id, location.latitude, location.longitude)
 

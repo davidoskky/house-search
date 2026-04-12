@@ -95,6 +95,15 @@ def _listing_from_raw(raw: dict) -> Listing | None:
         m["src"] for m in multimedia if m.get("type") == "image" and m.get("src")
     ]
 
+    # Phone number (may be absent if the listing owner hides it)
+    phones = raw.get("phones") or []
+    phone = str(phones[0]).strip() if phones else None
+    if not phone:
+        contact = raw.get("contact") or {}
+        phone = contact.get("phone") or contact.get("phoneNumber") or None
+        if phone:
+            phone = str(phone).strip()
+
     # Build title
     building_subtype = raw.get("buildingSubtype") or building_type or "Piso"
     title = f"{building_subtype} en {address}" if address else f"{building_subtype} {external_id}"
@@ -112,6 +121,7 @@ def _listing_from_raw(raw: dict) -> Listing | None:
         neighborhood=neighborhood,
         latitude=latitude,
         longitude=longitude,
+        phone=phone,
         image_urls=image_urls,
         has_elevator=has_elevator,
         has_parking=has_parking,

@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import math
-from typing import Any
 
 import folium
 import streamlit as st
 from streamlit_folium import st_folium
 
 from house_search.models import Listing
-from house_search.storage import load_listings
+from house_search.storage import load_listings, update_listing_status
 
 # Santiago de Compostela centre
 _CENTRE = (42.8782, -8.5448)
@@ -34,9 +33,12 @@ def _filter_listings(
     amenities: dict[str, bool],
     sources: list[str],
     property_types: list[str],
+    statuses: list[str],
 ) -> list[Listing]:
     result = []
     for lst in listings:
+        if statuses and lst.status not in statuses:
+            continue
         if not (price_range[0] <= lst.price <= price_range[1]):
             continue
         ppr = lst.price_per_room
@@ -87,6 +89,27 @@ def _build_map(listings: list[Listing]) -> folium.Map:
     return m
 
 
+_STATUS_LABELS = {
+    "new": ("⬜", "Nueva"),
+    "to_call": ("📞", "Llamar"),
+    "called": ("✅", "Llamada"),
+    "discarded": ("🗑️", "Descartada"),
+}
+
+_NEXT_ACTIONS = {
+    # current_status -> list of (label, new_status)
+    "new":       [("📞 Llamar", "to_call"), ("🗑️ Descartar", "discarded")],
+    "to_call":   [("✅ Llamada", "called"), ("🗑️ Descartar", "discarded"), ("↩️", "new")],
+    "called":    [("📞 Volver a llamar", "to_call"), ("🗑️ Descartar", "discarded"), ("↩️", "new")],
+    "discarded": [("↩️ Restaurar", "new")],
+}
+
+
+def _set_status(listing_id: str, status: str) -> None:
+    update_listing_status(listing_id, status)
+    _load.clear()
+
+
 def _listing_card(lst: Listing) -> None:
     ppr = f" · **{lst.price_per_room:.0f}€/h**" if lst.price_per_room else ""
     rooms = f" · {lst.rooms}h" if lst.rooms else ""
@@ -101,6 +124,8 @@ def _listing_card(lst: Listing) -> None:
     if lst.has_terrace:
         badges.append("🌿")
 
+    status_icon, status_label = _STATUS_LABELS.get(lst.status, ("⬜", lst.status))
+
     with st.container(border=True):
         cols = st.columns([2, 5])
         with cols[0]:
@@ -109,15 +134,25 @@ def _listing_card(lst: Listing) -> None:
             else:
                 st.markdown("🏠")
         with cols[1]:
-            st.markdown(
-                f"{source_badge} {geo} [{lst.title[:55]}]({lst.url})"
-            )
+            st.markdown(f"{source_badge} {geo} [{lst.title[:55]}]({lst.url})")
             st.markdown(
                 f"**{lst.price:.0f}€/mes**{ppr}{rooms}{size}"
                 + ("  " + " ".join(badges) if badges else "")
             )
             if lst.neighborhood:
                 st.caption(lst.neighborhood)
+            if lst.phone:
+                st.markdown(f"📞 `{lst.phone}`")
+
+        # Status row: current status badge + action buttons
+        action_cols = st.columns([2] + [2] * len(_NEXT_ACTIONS.get(lst.status, [])))
+        with action_cols[0]:
+            st.caption(f"{status_icon} {status_label}")
+        for i, (label, new_status) in enumerate(_NEXT_ACTIONS.get(lst.status, []), 1):
+            with action_cols[i]:
+                if st.button(label, key=f"status_{lst.id}_{new_status}", use_container_width=True):
+                    _set_status(lst.id, new_status)
+                    st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +231,12 @@ def main() -> None:
         show_idealista = st.checkbox("Idealista", value=True)
         show_fotocasa = st.checkbox("Fotocasa", value=True)
 
+        st.subheader("Estado")
+        show_new = st.checkbox("⬜ Nueva", value=True)
+        show_to_call = st.checkbox("📞 Llamar", value=True)
+        show_called = st.checkbox("✅ Llamada", value=True)
+        show_discarded = st.checkbox("🗑️ Descartada", value=False)
+
         st.subheader("Tipo de inmueble")
         all_types = sorted({l.property_type for l in all_listings})
         selected_types = st.multiselect("Tipo", all_types, default=all_types)
@@ -215,6 +256,16 @@ def main() -> None:
     if show_fotocasa:
         sources_filter.append("fotocasa")
 
+    statuses_filter = []
+    if show_new:
+        statuses_filter.append("new")
+    if show_to_call:
+        statuses_filter.append("to_call")
+    if show_called:
+        statuses_filter.append("called")
+    if show_discarded:
+        statuses_filter.append("discarded")
+
     amenities = {
         "has_elevator": want_elevator,
         "has_parking": want_parking,
@@ -232,6 +283,7 @@ def main() -> None:
         amenities=amenities,
         sources=sources_filter,
         property_types=selected_types,
+        statuses=statuses_filter,
     )
 
     # Apply neighborhood filter (post-step, cleaner)

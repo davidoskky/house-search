@@ -5,7 +5,7 @@ import sqlite_utils
 import pytest
 
 from house_search.models import Listing
-from house_search.storage import geocode_missing, load_listings, save_listing, save_listings
+from house_search.storage import geocode_missing, load_listings, save_listing, save_listings, update_listing_status
 
 
 def _db() -> sqlite_utils.Database:
@@ -137,6 +137,47 @@ class TestLoadListings:
         assert len(loaded) == 3
         prices = {l.price for l in loaded}
         assert prices == {500.0, 800.0, 1000.0}
+
+
+class TestListingStatus:
+    def test_default_status_is_new(self):
+        db = _db()
+        save_listing(_listing(), db)
+        row = list(db["listings"].rows)[0]
+        assert row["status"] == "new"
+
+    def test_update_status(self):
+        db = _db()
+        save_listing(_listing(), db)
+        update_listing_status("idealista:10001", "to_call", db)
+        row = list(db["listings"].rows)[0]
+        assert row["status"] == "to_call"
+
+    def test_status_preserved_on_rescrape(self):
+        db = _db()
+        save_listing(_listing(price=700.0), db)
+        update_listing_status("idealista:10001", "discarded", db)
+        # Re-scrape with updated price
+        save_listing(_listing(price=750.0), db)
+        row = list(db["listings"].rows)[0]
+        assert row["status"] == "discarded"
+        assert row["price"] == 750.0
+
+    def test_new_status_overwritten_on_rescrape(self):
+        """status='new' (default) should not block fresh saves."""
+        db = _db()
+        save_listing(_listing(price=700.0), db)
+        save_listing(_listing(price=750.0), db)
+        row = list(db["listings"].rows)[0]
+        assert row["status"] == "new"
+        assert row["price"] == 750.0
+
+    def test_roundtrip_preserves_status(self):
+        db = _db()
+        save_listing(_listing(), db)
+        update_listing_status("idealista:10001", "called", db)
+        loaded = load_listings(db)
+        assert loaded[0].status == "called"
 
 
 class TestGeocodeEnsureIndexes:

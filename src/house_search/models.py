@@ -23,6 +23,7 @@ class Listing(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     description: str | None = None
+    phone: str | None = None
     image_urls: list[str] = Field(default_factory=list)
     has_elevator: bool | None = None
     has_parking: bool | None = None
@@ -30,6 +31,7 @@ class Listing(BaseModel):
     has_garden: bool | None = None
     pets_allowed: bool | None = None
     property_type: Literal["flat", "house", "studio", "duplex", "other"] = "flat"
+    status: Literal["new", "to_call", "called", "discarded"] = "new"
     scraped_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
