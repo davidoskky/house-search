@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 import sqlite_utils
@@ -46,6 +47,7 @@ def get_db() -> sqlite_utils.Database:
                 "property_type": str,
                 "status": str,
                 "scraped_at": str,
+                "duplicate_of": str,
             },
             pk="id",
         )
@@ -53,8 +55,9 @@ def get_db() -> sqlite_utils.Database:
     if "listings" in db.table_names():
         existing_cols = {c.name for c in db["listings"].columns}
         migrations = [
-            ("phone",  "TEXT"),
-            ("status", "TEXT DEFAULT 'new'"),
+            ("phone",        "TEXT"),
+            ("status",       "TEXT DEFAULT 'new'"),
+            ("duplicate_of", "TEXT"),
         ]
         for col, col_def in migrations:
             if col not in existing_cols:
@@ -93,13 +96,16 @@ def save_listing(listing: Listing, db: sqlite_utils.Database | None = None) -> N
     for field in ("has_elevator", "has_parking", "has_terrace", "has_garden", "pets_allowed"):
         if row[field] is not None:
             row[field] = int(row[field])
-    # Preserve user-set status across re-scrapes
+    # Preserve user-set status and duplicate_of across re-scrapes
     if "listings" in db.table_names():
         existing = db.execute(
-            "SELECT status FROM listings WHERE id = ?", [row["id"]]
+            "SELECT status, duplicate_of FROM listings WHERE id = ?", [row["id"]]
         ).fetchone()
-        if existing and existing[0] and existing[0] != "new":
-            row["status"] = existing[0]
+        if existing:
+            if existing[0] and existing[0] != "new":
+                row["status"] = existing[0]
+            if existing[1]:
+                row["duplicate_of"] = existing[1]
     db["listings"].upsert(row, pk="id", alter=True)
 
 
@@ -115,13 +121,34 @@ def update_listing_status(
     status: str,
     db: sqlite_utils.Database | None = None,
 ) -> None:
+    """Update status for a listing and all members of its duplicate group."""
     if db is None:
         db = get_db()
-    db.execute("UPDATE listings SET status = ? WHERE id = ?", [status, listing_id])
+
+    # Find the canonical ID for this listing
+    row = db.execute(
+        "SELECT duplicate_of FROM listings WHERE id = ?", [listing_id]
+    ).fetchone()
+    canonical_id = row[0] if row and row[0] else listing_id
+
+    # Update the canonical and every listing that points to it
+    db.execute("UPDATE listings SET status = ? WHERE id = ?", [status, canonical_id])
+    db.execute("UPDATE listings SET status = ? WHERE duplicate_of = ?", [status, canonical_id])
     db.conn.commit()
 
 
-def load_listings(db: sqlite_utils.Database | None = None) -> list[Listing]:
+def _deserialise_row(row: dict) -> Listing:
+    row["image_urls"] = json.loads(row["image_urls"] or "[]")
+    for field in ("has_elevator", "has_parking", "has_terrace", "has_garden", "pets_allowed"):
+        if row[field] is not None:
+            row[field] = bool(row[field])
+    return Listing(**row)
+
+
+def load_listings(
+    db: sqlite_utils.Database | None = None,
+    include_duplicates: bool = False,
+) -> list[Listing]:
     if db is None:
         db = get_db()
     if "listings" not in db.table_names():
@@ -129,12 +156,110 @@ def load_listings(db: sqlite_utils.Database | None = None) -> list[Listing]:
     rows = list(db["listings"].rows)
     listings = []
     for row in rows:
-        row["image_urls"] = json.loads(row["image_urls"] or "[]")
-        for field in ("has_elevator", "has_parking", "has_terrace", "has_garden", "pets_allowed"):
-            if row[field] is not None:
-                row[field] = bool(row[field])
-        listings.append(Listing(**row))
+        if not include_duplicates and row.get("duplicate_of"):
+            continue
+        listings.append(_deserialise_row(row))
     return listings
+
+
+def _coord_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Approximate distance in metres between two points (flat-earth, good for <1 km)."""
+    dlat = (lat2 - lat1) * 111_000
+    dlon = (lon2 - lon1) * 111_000 * math.cos(math.radians((lat1 + lat2) / 2))
+    return math.sqrt(dlat ** 2 + dlon ** 2)
+
+
+def _is_duplicate(candidate: Listing, canonical: Listing) -> bool:
+    """Return True if *candidate* looks like the same property as *canonical*."""
+    # Strong signal: same non-empty phone number
+    if candidate.phone and canonical.phone and candidate.phone == canonical.phone:
+        return True
+
+    # Weaker signal: matching key features
+    price_ok = (
+        candidate.price is not None
+        and canonical.price is not None
+        and abs(candidate.price - canonical.price) / canonical.price <= 0.03
+    )
+    rooms_ok = candidate.rooms is not None and candidate.rooms == canonical.rooms
+    size_ok = (
+        candidate.size_m2 is not None
+        and canonical.size_m2 is not None
+        and abs(candidate.size_m2 - canonical.size_m2) / canonical.size_m2 <= 0.05
+    )
+
+    if not (price_ok and rooms_ok and size_ok):
+        return False
+
+    # Need at least one location signal to avoid false positives
+    coords_ok = (
+        candidate.latitude is not None
+        and candidate.longitude is not None
+        and canonical.latitude is not None
+        and canonical.longitude is not None
+        and _coord_distance_m(
+            candidate.latitude, candidate.longitude,
+            canonical.latitude, canonical.longitude,
+        ) <= 200
+    )
+    neighborhood_ok = (
+        candidate.neighborhood
+        and canonical.neighborhood
+        and candidate.neighborhood.lower() == canonical.neighborhood.lower()
+    )
+    return bool(coords_ok or neighborhood_ok)
+
+
+def deduplicate_listings(db: sqlite_utils.Database | None = None) -> int:
+    """Mark duplicate listings in the database.
+
+    A listing is a duplicate if it matches an earlier listing by phone number,
+    or by (price ±3%, rooms, size ±5%) plus location proximity / same neighbourhood.
+
+    The canonical listing is the earliest-scraped one among a group.
+    Returns the number of listings newly marked as duplicates.
+    """
+    if db is None:
+        db = get_db()
+    if "listings" not in db.table_names():
+        return 0
+
+    # Reset all duplicate marks so we recompute from scratch each run
+    db.execute("UPDATE listings SET duplicate_of = NULL")
+    db.conn.commit()
+
+    # Load all listings ordered by scraped_at so the earliest becomes canonical
+    rows = list(db.execute(
+        "SELECT * FROM listings ORDER BY scraped_at ASC"
+    ).fetchall())
+    columns = [desc[0] for desc in db.execute("SELECT * FROM listings LIMIT 0").description]
+
+    canonical: list[Listing] = []
+    newly_marked = 0
+
+    for raw in rows:
+        row = dict(zip(columns, raw))
+        listing = _deserialise_row(row)
+
+        matched_id: str | None = None
+        for canon in canonical:
+            if listing.id == canon.id:
+                break  # same listing, skip
+            if _is_duplicate(listing, canon):
+                matched_id = canon.id
+                break
+
+        if matched_id:
+            db.execute(
+                "UPDATE listings SET duplicate_of = ? WHERE id = ?",
+                [matched_id, listing.id],
+            )
+            newly_marked += 1
+        else:
+            canonical.append(listing)
+
+    db.conn.commit()
+    return newly_marked
 
 
 def geocode_missing(db: sqlite_utils.Database | None = None) -> int:

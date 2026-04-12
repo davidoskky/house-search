@@ -13,8 +13,9 @@ from house_search.storage import load_listings, update_listing_status
 # Santiago de Compostela centre
 _CENTRE = (42.8782, -8.5448)
 _SOURCE_COLOURS = {
-    "idealista": "#2563eb",   # blue
-    "fotocasa": "#ea580c",    # orange
+    "idealista":   "#2563eb",   # blue
+    "fotocasa":    "#ea580c",   # orange
+    "milanuncios": "#16a34a",   # green
 }
 
 
@@ -25,11 +26,14 @@ _SOURCE_COLOURS = {
 def _filter_listings(
     listings: list[Listing],
     price_range: tuple[float, float],
+    price_max_cap: float,
     ppr_range: tuple[float, float],
+    ppr_max_cap: float,
     min_rooms: int,
     max_rooms: int,
     min_size: float,
     max_size: float,
+    size_max_cap: float,
     amenities: dict[str, bool],
     sources: list[str],
     property_types: list[str],
@@ -39,15 +43,21 @@ def _filter_listings(
     for lst in listings:
         if statuses and lst.status not in statuses:
             continue
-        if not (price_range[0] <= lst.price <= price_range[1]):
+        # When slider is at its cap, treat as "no upper bound"
+        price_max = math.inf if price_range[1] >= price_max_cap else price_range[1]
+        if not (price_range[0] <= lst.price <= price_max):
             continue
         ppr = lst.price_per_room
-        if ppr is not None and not (ppr_range[0] <= ppr <= ppr_range[1]):
-            continue
+        if ppr is not None:
+            ppr_max = math.inf if ppr_range[1] >= ppr_max_cap else ppr_range[1]
+            if not (ppr_range[0] <= ppr <= ppr_max):
+                continue
         if lst.rooms is not None and not (min_rooms <= lst.rooms <= max_rooms):
             continue
-        if lst.size_m2 is not None and not (min_size <= lst.size_m2 <= max_size):
-            continue
+        if lst.size_m2 is not None:
+            size_max = math.inf if max_size >= size_max_cap else max_size
+            if not (min_size <= lst.size_m2 <= size_max):
+                continue
         if sources and lst.source not in sources:
             continue
         if property_types and lst.property_type not in property_types:
@@ -178,17 +188,22 @@ def main() -> None:
         return
 
     # ---- compute bounds for sliders ----
+    def _p99(values: list[float]) -> float:
+        s = sorted(values)
+        return s[min(int(len(s) * 0.99), len(s) - 1)]
+
     prices = [l.price for l in all_listings]
     pprs = [l.price_per_room for l in all_listings if l.price_per_room is not None]
     sizes = [l.size_m2 for l in all_listings if l.size_m2 is not None]
     all_rooms = [l.rooms for l in all_listings if l.rooms is not None]
     all_neighborhoods = sorted({l.neighborhood for l in all_listings if l.neighborhood})
 
-    min_price, max_price = math.floor(min(prices)), math.ceil(max(prices))
+    min_price = math.floor(min(prices))
+    max_price = math.ceil(_p99(prices))
     min_ppr = math.floor(min(pprs)) if pprs else 0
-    max_ppr = math.ceil(max(pprs)) if pprs else 2000
+    max_ppr = math.ceil(_p99(pprs)) if pprs else 2000
     min_size_val = math.floor(min(sizes)) if sizes else 0
-    max_size_val = math.ceil(max(sizes)) if sizes else 500
+    max_size_val = math.ceil(_p99(sizes)) if sizes else 500
     min_rooms_val = min(all_rooms) if all_rooms else 1
     max_rooms_val = max(all_rooms) if all_rooms else 6
 
@@ -228,8 +243,11 @@ def main() -> None:
         want_terrace = st.checkbox("Terraza")
 
         st.subheader("Fuente")
-        show_idealista = st.checkbox("Idealista", value=True)
-        show_fotocasa = st.checkbox("Fotocasa", value=True)
+        all_sources = sorted({l.source for l in all_listings})
+        selected_sources = [
+            src for src in all_sources
+            if st.checkbox(src.capitalize(), value=True, key=f"src_{src}")
+        ]
 
         st.subheader("Estado")
         show_new = st.checkbox("⬜ Nueva", value=True)
@@ -250,11 +268,7 @@ def main() -> None:
             selected_hoods = []
 
     # ---- apply filters ----
-    sources_filter = []
-    if show_idealista:
-        sources_filter.append("idealista")
-    if show_fotocasa:
-        sources_filter.append("fotocasa")
+    sources_filter = selected_sources
 
     statuses_filter = []
     if show_new:
@@ -275,11 +289,14 @@ def main() -> None:
     filtered = _filter_listings(
         all_listings,
         price_range=price_range,
+        price_max_cap=max_price,
         ppr_range=ppr_range,
+        ppr_max_cap=max_ppr,
         min_rooms=room_range[0],
         max_rooms=room_range[1],
         min_size=size_range[0],
         max_size=size_range[1],
+        size_max_cap=max_size_val,
         amenities=amenities,
         sources=sources_filter,
         property_types=selected_types,

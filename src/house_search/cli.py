@@ -8,7 +8,8 @@ from rich.table import Table
 
 from .scrapers.fotocasa import FotocasaScraper
 from .scrapers.idealista import IdealistaScraper
-from .storage import geocode_missing, get_db, load_listings, save_listings
+from .scrapers.milanuncios import MilanunciosScraper
+from .storage import deduplicate_listings, geocode_missing, get_db, load_listings, save_listings
 
 console = Console()
 
@@ -23,6 +24,8 @@ async def run_scrapers(
         scrapers.append(IdealistaScraper(max_pages=max_pages, headless=headless))
     if "fotocasa" in sources:
         scrapers.append(FotocasaScraper(max_pages=max_pages, headless=headless))
+    if "milanuncios" in sources:
+        scrapers.append(MilanunciosScraper(max_pages=max_pages, headless=headless))
 
     all_listings = []
 
@@ -46,10 +49,16 @@ async def run_scrapers(
         db = get_db()
         save_listings(all_listings, db)
         console.print(f"\n[bold green]Saved {len(all_listings)} listings to database.[/bold green]")
+        console.rule("Deduplication")
+        n_dup = deduplicate_listings(db)
+        if n_dup:
+            console.print(f"[yellow]Marked {n_dup} duplicate listing(s).[/yellow]")
+        else:
+            console.print("[dim]No duplicates found.[/dim]")
         console.rule("Geocoding")
         n = geocode_missing(db)
         if n:
-            console.print(f"[green]Geocoded {n} Idealista listing(s).[/green]")
+            console.print(f"[green]Geocoded {n} listing(s).[/green]")
         else:
             console.print("[dim]No new addresses to geocode.[/dim]")
     else:
@@ -92,8 +101,8 @@ def main() -> None:
     scrape_p.add_argument(
         "--sources",
         nargs="+",
-        default=["idealista", "fotocasa"],
-        choices=["idealista", "fotocasa"],
+        default=["idealista", "fotocasa", "milanuncios"],
+        choices=["idealista", "fotocasa", "milanuncios"],
     )
     scrape_p.add_argument("--max-pages", type=int, default=20)
     scrape_p.add_argument("--no-headless", action="store_true", help="Show browser window")
