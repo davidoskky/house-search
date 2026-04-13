@@ -32,6 +32,8 @@ class Listing(BaseModel):
     pets_allowed: bool | None = None
     property_type: Literal["flat", "house", "studio", "duplex", "other"] = "flat"
     status: Literal["new", "to_call", "called", "discarded"] = "new"
+    favorite: bool = False
+    comments: str | None = None
     duplicate_of: str | None = None  # id of the canonical listing, if this is a duplicate
     scraped_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)

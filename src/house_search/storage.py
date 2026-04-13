@@ -46,6 +46,8 @@ def get_db() -> sqlite_utils.Database:
                 "pets_allowed": int,
                 "property_type": str,
                 "status": str,
+                "favorite": int,
+                "comments": str,
                 "scraped_at": str,
                 "duplicate_of": str,
             },
@@ -58,6 +60,8 @@ def get_db() -> sqlite_utils.Database:
             ("phone",        "TEXT"),
             ("status",       "TEXT DEFAULT 'new'"),
             ("duplicate_of", "TEXT"),
+            ("favorite",     "INTEGER DEFAULT 0"),
+            ("comments",     "TEXT"),
         ]
         for col, col_def in migrations:
             if col not in existing_cols:
@@ -96,16 +100,21 @@ def save_listing(listing: Listing, db: sqlite_utils.Database | None = None) -> N
     for field in ("has_elevator", "has_parking", "has_terrace", "has_garden", "pets_allowed"):
         if row[field] is not None:
             row[field] = int(row[field])
-    # Preserve user-set status and duplicate_of across re-scrapes
+    # Preserve user-set fields across re-scrapes
     if "listings" in db.table_names():
         existing = db.execute(
-            "SELECT status, duplicate_of FROM listings WHERE id = ?", [row["id"]]
+            "SELECT status, duplicate_of, favorite, comments FROM listings WHERE id = ?",
+            [row["id"]],
         ).fetchone()
         if existing:
             if existing[0] and existing[0] != "new":
                 row["status"] = existing[0]
             if existing[1]:
                 row["duplicate_of"] = existing[1]
+            if existing[2]:
+                row["favorite"] = existing[2]
+            if existing[3]:
+                row["comments"] = existing[3]
     db["listings"].upsert(row, pk="id", alter=True)
 
 
@@ -137,10 +146,36 @@ def update_listing_status(
     db.conn.commit()
 
 
+def toggle_favorite(
+    listing_id: str,
+    db: sqlite_utils.Database | None = None,
+) -> bool:
+    """Toggle the favorite flag. Returns the new value."""
+    if db is None:
+        db = get_db()
+    row = db.execute("SELECT favorite FROM listings WHERE id = ?", [listing_id]).fetchone()
+    new_value = 0 if (row and row[0]) else 1
+    db.execute("UPDATE listings SET favorite = ? WHERE id = ?", [new_value, listing_id])
+    db.conn.commit()
+    return bool(new_value)
+
+
+def update_comments(
+    listing_id: str,
+    comments: str,
+    db: sqlite_utils.Database | None = None,
+) -> None:
+    """Save free-text comments for a listing."""
+    if db is None:
+        db = get_db()
+    db.execute("UPDATE listings SET comments = ? WHERE id = ?", [comments or None, listing_id])
+    db.conn.commit()
+
+
 def _deserialise_row(row: dict) -> Listing:
     row["image_urls"] = json.loads(row["image_urls"] or "[]")
-    for field in ("has_elevator", "has_parking", "has_terrace", "has_garden", "pets_allowed"):
-        if row[field] is not None:
+    for field in ("has_elevator", "has_parking", "has_terrace", "has_garden", "pets_allowed", "favorite"):
+        if row.get(field) is not None:
             row[field] = bool(row[field])
     return Listing(**row)
 

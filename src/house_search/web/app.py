@@ -8,7 +8,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from house_search.models import Listing
-from house_search.storage import load_listings, update_listing_status
+from house_search.storage import (
+    load_listings,
+    toggle_favorite,
+    update_comments,
+    update_listing_status,
+)
 
 # Santiago de Compostela centre
 _CENTRE = (42.8782, -8.5448)
@@ -170,6 +175,16 @@ def _set_status(listing_id: str, status: str) -> None:
     _load.clear()
 
 
+def _toggle_favorite(listing_id: str) -> None:
+    toggle_favorite(listing_id)
+    _load.clear()
+
+
+def _save_comments(listing_id: str, comments: str) -> None:
+    update_comments(listing_id, comments)
+    _load.clear()
+
+
 def _listing_card(lst: Listing) -> None:
     ppr = f" · **{lst.price_per_room:.0f}€/h**" if lst.price_per_room else ""
     rooms = f" · {lst.rooms}h" if lst.rooms else ""
@@ -194,10 +209,11 @@ def _listing_card(lst: Listing) -> None:
             else:
                 st.markdown("🏠")
         with cols[1]:
+            star = "⭐" if lst.favorite else ""
             st.markdown(
                 f'<span style="display:inline-block;width:10px;height:10px;'
                 f'border-radius:50%;background:{source_badge};margin-right:4px"></span>'
-                f'[{lst.title[:55]}]({lst.url})',
+                f'{star} [{lst.title[:55]}]({lst.url})',
                 unsafe_allow_html=True,
             )
             st.markdown(
@@ -209,13 +225,18 @@ def _listing_card(lst: Listing) -> None:
             if lst.phone:
                 st.markdown(f"📞 `{lst.phone}`")
 
-        action_cols = st.columns([1, 2] + [2] * len(_NEXT_ACTIONS.get(lst.status, [])))
+        action_cols = st.columns([1, 1, 2] + [2] * len(_NEXT_ACTIONS.get(lst.status, [])))
         with action_cols[0]:
             locate_label = "🟡" if is_highlighted else "📍"
             if lst.latitude and st.button(locate_label, key=f"locate_{lst.id}", help="Ver en el mapa"):
                 st.session_state.map_highlight = None if is_highlighted else lst.id
                 st.rerun()
         with action_cols[1]:
+            fav_label = "⭐" if lst.favorite else "☆"
+            if st.button(fav_label, key=f"fav_{lst.id}", help="Marcar como favorito"):
+                _toggle_favorite(lst.id)
+                st.rerun()
+        with action_cols[2]:
             colour = _STATUS_COLOURS.get(lst.status, "#6b7280")
             st.markdown(
                 f'<span style="background:{colour};color:white;padding:3px 10px;'
@@ -223,11 +244,25 @@ def _listing_card(lst: Listing) -> None:
                 f'{status_icon} {status_label}</span>',
                 unsafe_allow_html=True,
             )
-        for i, (label, new_status) in enumerate(_NEXT_ACTIONS.get(lst.status, []), 2):
+        for i, (label, new_status) in enumerate(_NEXT_ACTIONS.get(lst.status, []), 3):
             with action_cols[i]:
                 if st.button(label, key=f"status_{lst.id}_{new_status}", use_container_width=True):
                     _set_status(lst.id, new_status)
                     st.rerun()
+
+        # Comments
+        with st.expander("💬 Comentarios" + (f" ({lst.comments[:40]}…)" if lst.comments and len(lst.comments) > 40 else f" ({lst.comments})" if lst.comments else ""), expanded=bool(lst.comments)):
+            new_comment = st.text_area(
+                "Notas compartidas",
+                value=lst.comments or "",
+                key=f"comment_{lst.id}",
+                height=80,
+                label_visibility="collapsed",
+                placeholder="Añade notas sobre este piso…",
+            )
+            if st.button("Guardar", key=f"save_comment_{lst.id}"):
+                _save_comments(lst.id, new_comment)
+                st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +349,9 @@ def main() -> None:
             if st.checkbox(src.capitalize(), value=True, key=f"src_{src}")
         ]
 
+        st.subheader("Favoritos")
+        only_favorites = st.checkbox("⭐ Solo favoritos", value=False)
+
         st.subheader("Estado")
         show_new = st.checkbox("⬜ Nueva", value=True)
         show_to_call = st.checkbox("📞 Llamar", value=True)
@@ -369,7 +407,10 @@ def main() -> None:
     if selected_hoods:
         filtered = [l for l in filtered if l.neighborhood in selected_hoods]
 
-    filtered.sort(key=lambda l: l.price)
+    if only_favorites:
+        filtered = [l for l in filtered if l.favorite]
+
+    filtered.sort(key=lambda l: (not l.favorite, l.price))
 
     # ---- layout: cards | map ----
     st.caption(
