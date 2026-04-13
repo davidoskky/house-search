@@ -81,6 +81,75 @@ class IdealistaScraper(BaseScraper):
         finally:
             await context.close()
 
+    async def scrape_detail_url(self, url: str, browser: Browser) -> Listing | None:
+        """Scrape a single Idealista listing from its detail page URL."""
+        m = re.search(r"/inmueble/(\d+)/", url)
+        if not m:
+            console.print(f"[yellow]idealista[/yellow] Could not extract ID from URL: {url}")
+            return None
+        external_id = m.group(1)
+
+        context = await self._new_context(browser)
+        page = await self._new_page(context)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await random_delay(2, 4)
+            await self._accept_cookies(page)
+            await random_delay(1, 2)
+
+            soup = BeautifulSoup(await page.content(), "html.parser")
+
+            title_el = soup.select_one("h1.main-info__title-main, h1.main-info__title, h1")
+            title = title_el.get_text(strip=True) if title_el else f"Idealista {external_id}"
+
+            price_el = soup.select_one(".info-data-price, .price-features__current")
+            price = _parse_price(price_el.get_text()) if price_el else None
+            if not price:
+                return None
+
+            size_m2 = rooms = bathrooms = None
+            floor: str | None = None
+            for li in soup.select(".details-property_features li, .stats-text"):
+                text = li.get_text(strip=True)
+                tl = text.lower()
+                if "m²" in text:
+                    size_m2 = _parse_float(text)
+                elif "hab" in tl:
+                    rooms = _parse_int(text)
+                elif "baño" in tl:
+                    bathrooms = _parse_int(text)
+                elif any(k in tl for k in ("planta", "bajo", "ático")):
+                    floor = text
+
+            images: list[str] = []
+            for img in soup.select(".main-slider img[src], .slider img[src], img[data-src]"):
+                src = str(img.get("src") or img.get("data-src") or "")
+                if src.startswith("http"):
+                    images.append(src)
+
+            all_text = soup.get_text(" ").lower()
+            has_elevator = "ascensor" in all_text or None
+            has_parking = ("garaje" in all_text or "parking" in all_text) or None
+            has_terrace = "terraza" in all_text or None
+
+            return Listing(
+                source="idealista",
+                external_id=external_id,
+                url=url,
+                title=title,
+                price=price,
+                size_m2=size_m2,
+                rooms=rooms,
+                bathrooms=bathrooms,
+                floor=floor,
+                image_urls=images[:3],
+                has_elevator=has_elevator if has_elevator else None,
+                has_parking=has_parking if has_parking else None,
+                has_terrace=has_terrace if has_terrace else None,
+            )
+        finally:
+            await context.close()
+
     async def _accept_cookies(self, page: Page) -> None:
         for selector in [
             "#didomi-notice-agree-button",

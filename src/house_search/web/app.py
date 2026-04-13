@@ -8,8 +8,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from house_search.models import Listing
+from house_search.scrapers import scrape_single_listing
 from house_search.storage import (
+    get_db,
     load_listings,
+    save_listing,
     toggle_favorite,
     update_comments,
     update_listing_status,
@@ -369,6 +372,26 @@ def main() -> None:
             )
         else:
             selected_hoods = []
+
+        st.divider()
+        st.subheader("➕ Añadir anuncio")
+        manual_url = st.text_input(
+            "URL del anuncio",
+            placeholder="https://www.idealista.com/inmueble/…",
+            label_visibility="collapsed",
+        )
+        if st.button("Scrape", use_container_width=True, disabled=not manual_url):
+            with st.spinner("Scrapeando…"):
+                try:
+                    listing = scrape_single_listing(manual_url.strip())
+                    if listing:
+                        save_listing(listing, get_db())
+                        _load.clear()
+                        st.success(f"Añadido: {listing.title[:50]}")
+                    else:
+                        st.error("No se pudo extraer el anuncio. Comprueba la URL.")
+                except Exception as exc:
+                    st.error(f"Error: {exc}")
 
     # ---- apply filters ----
     statuses_filter = []

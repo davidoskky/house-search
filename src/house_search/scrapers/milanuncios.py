@@ -32,6 +32,69 @@ class MilanunciosScraper(BaseScraper):
         super().__init__(headless=headless)
         self.max_pages = max_pages
 
+    async def scrape_detail_url(self, url: str, browser: Browser) -> Listing | None:
+        """Scrape a single Milanuncios listing from its detail page URL."""
+        m = re.search(r"-(\d+)\.htm", url)
+        if not m:
+            console.print(f"[yellow]milanuncios[/yellow] Could not extract ID from URL: {url}")
+            return None
+        external_id = m.group(1)
+
+        context = await self._new_context(browser)
+        page = await self._new_page(context)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await random_delay(2, 4)
+            await self._accept_cookies(page)
+
+            soup = BeautifulSoup(await page.content(), "html.parser")
+
+            title_el = soup.select_one("h1")
+            title = title_el.get_text(strip=True) if title_el else f"Milanuncios {external_id}"
+
+            price_el = (
+                soup.select_one(".ma-AdPrice-value")
+                or soup.select_one("[class*='price']")
+            )
+            price = _parse_price(price_el.get_text()) if price_el else None
+            if not price:
+                return None
+
+            all_text = soup.get_text(" ", strip=True).lower()
+            size_m2 = None
+            rooms = None
+            m2 = re.search(r"(\d+)\s*m[²2]", all_text)
+            if m2:
+                size_m2 = float(m2.group(1))
+            rm = re.search(r"(\d+)\s*hab", all_text)
+            if rm:
+                rooms = int(rm.group(1))
+
+            desc_el = soup.select_one("[class*='description'], [class*='Description']")
+            description = desc_el.get_text(strip=True) if desc_el else None
+
+            images: list[str] = []
+            for img in soup.select("img[src]"):
+                src = str(img.get("src", ""))
+                if src.startswith("http") and not src.endswith(".svg"):
+                    images.append(src)
+                    if len(images) >= 3:
+                        break
+
+            return Listing(
+                source="milanuncios",
+                external_id=external_id,
+                url=url,
+                title=title,
+                price=price,
+                size_m2=size_m2,
+                rooms=rooms,
+                description=description,
+                image_urls=images,
+            )
+        finally:
+            await context.close()
+
     async def scrape(self) -> AsyncIterator[Listing]:
         raise NotImplementedError("Use scrape_with_browser")
 

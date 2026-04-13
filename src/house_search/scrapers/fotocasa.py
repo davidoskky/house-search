@@ -139,6 +139,63 @@ class FotocasaScraper(BaseScraper):
         super().__init__(headless=headless)
         self.max_pages = max_pages
 
+    async def scrape_detail_url(self, url: str, browser: Browser) -> Listing | None:
+        """Scrape a single Fotocasa listing from its detail page URL."""
+        m = re.search(r"/(\d+)(?:\?|$|/)", url)
+        external_id = m.group(1) if m else None
+        if not external_id:
+            console.print(f"[yellow]fotocasa[/yellow] Could not extract ID from URL: {url}")
+            return None
+
+        context = await self._new_context(browser)
+        page = await self._new_page(context)
+        try:
+            await page.goto(url, wait_until="networkidle", timeout=60000)
+            await random_delay(2, 4)
+            await self._accept_cookies(page)
+            await random_delay(1, 2)
+
+            content = await page.content()
+
+            # Try __INITIAL_PROPS__ — detail pages may contain a single realEstate entry
+            props = _extract_initial_props(content)
+            if props:
+                # Detail pages nest under a different key
+                for key in ("realEstate", "result"):
+                    raw = props.get(key)
+                    if isinstance(raw, dict):
+                        listing = _listing_from_raw(raw)
+                        if listing:
+                            return listing
+                # Some detail pages wrap it in initialSearch too
+                try:
+                    raw_list = props["initialSearch"]["result"]["realEstates"]
+                    if raw_list:
+                        return _listing_from_raw(raw_list[0])
+                except (KeyError, TypeError, IndexError):
+                    pass
+
+            # HTML fallback
+            from bs4 import BeautifulSoup
+            soup = BeautifulSoup(content, "html.parser")
+            title_el = soup.select_one("h1")
+            title = title_el.get_text(strip=True) if title_el else f"Fotocasa {external_id}"
+            price_el = soup.select_one("[class*='price']")
+            price_text = price_el.get_text() if price_el else ""
+            pm = re.search(r"([\d\.]+)", price_text.replace(".", "").replace(",", "."))
+            price = float(pm.group(1)) if pm else None
+            if not price:
+                return None
+            return Listing(
+                source="fotocasa",
+                external_id=external_id,
+                url=url,
+                title=title,
+                price=price,
+            )
+        finally:
+            await context.close()
+
     async def scrape(self) -> AsyncIterator[Listing]:
         raise NotImplementedError("Use scrape_with_browser")
 
