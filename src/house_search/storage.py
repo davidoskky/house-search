@@ -18,7 +18,9 @@ DB_PATH = Path(__file__).parent.parent.parent / "data" / "listings.db"
 
 def get_db() -> sqlite_utils.Database:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite_utils.Database(DB_PATH, timeout=30)
+    import sqlite3
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    db = sqlite_utils.Database(conn)
     db.conn.execute("PRAGMA journal_mode=WAL")
     db.conn.execute("PRAGMA synchronous=NORMAL")
     if "listings" not in db.table_names():
