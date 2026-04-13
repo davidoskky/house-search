@@ -9,7 +9,8 @@ from rich.table import Table
 from .scrapers.fotocasa import FotocasaScraper
 from .scrapers.idealista import IdealistaScraper
 from .scrapers.milanuncios import MilanunciosScraper
-from .storage import deduplicate_listings, geocode_missing, get_db, load_listings, save_listings
+from .storage import (deduplicate_listings, geocode_missing, get_db,
+                      load_listings, save_listings)
 
 console = Console()
 
@@ -30,7 +31,11 @@ async def run_scrapers(
     all_listings = []
 
     async with async_playwright() as pw:
-        browser = await pw.firefox.launch(headless=headless)
+        browser = await pw.chromium.launch(
+            headless=headless,
+            timeout=30000,
+            args=["--disable-dev-shm-usage", "--no-sandbox"],
+        )
         try:
             for scraper in scrapers:
                 console.rule(f"[bold]{scraper.source}")
@@ -48,7 +53,9 @@ async def run_scrapers(
     if all_listings:
         db = get_db()
         save_listings(all_listings, db)
-        console.print(f"\n[bold green]Saved {len(all_listings)} listings to database.[/bold green]")
+        console.print(
+            f"\n[bold green]Saved {len(all_listings)} listings to database.[/bold green]"
+        )
         console.rule("Deduplication")
         n_dup = deduplicate_listings(db)
         if n_dup:
@@ -94,7 +101,9 @@ def show_listings() -> None:
 def main() -> None:
     import argparse
 
-    parser = argparse.ArgumentParser(description="House search scraper for Santiago de Compostela")
+    parser = argparse.ArgumentParser(
+        description="House search scraper for Santiago de Compostela"
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     scrape_p = subparsers.add_parser("scrape", help="Run scrapers")
@@ -105,7 +114,9 @@ def main() -> None:
         choices=["idealista", "fotocasa", "milanuncios"],
     )
     scrape_p.add_argument("--max-pages", type=int, default=20)
-    scrape_p.add_argument("--no-headless", action="store_true", help="Show browser window")
+    scrape_p.add_argument(
+        "--no-headless", action="store_true", help="Show browser window"
+    )
 
     subparsers.add_parser("list", help="Show stored listings")
 
@@ -116,20 +127,32 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "scrape":
-        asyncio.run(run_scrapers(args.sources, args.max_pages, headless=not args.no_headless))
+        asyncio.run(
+            run_scrapers(args.sources, args.max_pages, headless=not args.no_headless)
+        )
     elif args.command == "list":
         show_listings()
     elif args.command == "serve":
         import subprocess
         import sys
         from pathlib import Path
+
         app_path = Path(__file__).parent / "web" / "app.py"
-        subprocess.run([
-            sys.executable, "-m", "streamlit", "run", str(app_path),
-            "--server.port", str(args.port),
-            "--server.address", args.host,
-            "--browser.gatherUsageStats", "false",
-        ])
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                str(app_path),
+                "--server.port",
+                str(args.port),
+                "--server.address",
+                args.host,
+                "--browser.gatherUsageStats",
+                "false",
+            ]
+        )
     else:
         parser.print_help()
 
